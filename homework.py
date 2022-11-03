@@ -38,8 +38,8 @@ def send_message(bot, message):
     """Отправка сообщения в чат."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-    except telegram.error:
-        logger.error('Ошибка отправки сообщения в Telegram')
+    except Exception as error:
+        logger.error(f'Ошибка отправки сообщения в Telegram {error}')
         raise telegram.error.BadRequest('Бот не смог отправить сообщение')
     else:
         logger.info('Отправлено сообщение в Telegram')
@@ -55,11 +55,12 @@ def get_api_answer(current_timestamp):
         logger.error(f'Ошибка при запросе к основному API: {error}')
     if response.status_code != 200:
         logger.error('API недоступен')
-        raise requests.HTTPError('Response ' + str(response.status_code))
+        raise requests.HTTPError(f'Response {response.status_code}')
     try:
         return response.json()
     except requests.exceptions.JSONDecodeError:
         logger.error('Ошибка обработки результата запроса к API')
+        raise requests.exceptions.JSONDecodeError
 
 
 def check_response(response):
@@ -76,12 +77,10 @@ def check_response(response):
 
 def parse_status(homework):
     """Проверка изменения статуса работы."""
-    if 'homework_name' not in homework:
-        raise KeyError('Не найден ключ homework_name в словаре')
-    if 'status' not in homework:
-        raise KeyError('Не найден ключ status в словаре')
-    homework_name = homework['homework_name']
-    homework_status = homework['status']
+    homework_name = homework.get('homework_name')
+    homework_status = homework.get('status')
+    if not all([homework_name, homework_status]):
+        raise KeyError('В словаре не найден нужный ключ')
     try:
         verdict = HOMEWORK_STATUSES[homework_status]
     except KeyError:
@@ -97,34 +96,30 @@ def check_tokens():
 
 def main():
     """Основная логика работы бота."""
-    bot = telegram.Bot(token=TELEGRAM_TOKEN)
     if not check_tokens():
         logger.critical('Переданы не все токены')
-        send_message(bot, 'Переданы не все токены')
         sys.exit()
+    bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
-    old_status = ''
+    error_message = ''
     while True:
         try:
-            response = []
-            while not response:
-                response = check_response(get_api_answer(current_timestamp))
-                time.sleep(RETRY_TIME)
-            homework = response[0]
-            homework_status = homework['status']
-            if old_status != homework_status:
+            response = check_response(get_api_answer(current_timestamp))
+            if len(response) != 0:
+                homework = response[0]
                 message = parse_status(homework)
                 send_message(bot, message)
-                old_status = homework_status
-                current_timestamp = int(time.time())
                 logger.info('Изменился статус домашней работы')
             else:
-                old_status = homework_status
-                current_timestamp = int(time.time())
-                logger.debug('Статус не изменился')
+                logger.debug('Список домашних работ пуст')
         except Exception as error:
             logger.error(f'В работе возникла ошибка {error}')
+            new_error = f'В работе возникла ошибка {error}'
+            if new_error != error_message:
+                send_message(bot, f'В работе возникла ошибка {error}')
+                error_message = new_error
         finally:
+            current_timestamp = int(time.time())
             time.sleep(RETRY_TIME)
 
 
